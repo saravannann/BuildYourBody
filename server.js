@@ -11,7 +11,8 @@ const port = process.env.PORT || 3000;
 
 // Initialize using the same SDK configuration pattern as your POC
 const ai = new GoogleGenAI({});
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+const supabase = createClient(process.env.SUPABASE_URL, supabaseKey);
 
 const upload = multer({ storage: multer.memoryStorage() });
 app.use(express.json());

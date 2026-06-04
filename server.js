@@ -136,7 +136,7 @@ app.post('/api/analyze-plate', upload.single('image'), async (req, res) => {
         });
     } catch (error) {
         console.error('Data pipeline operations failed:', error);
-        return res.status(500).json({ error: 'Failed to analyze food image.' });
+        return res.status(500).json({ error: `Failed to analyze food image: ${error.message || error}` });
     }
 });
 
@@ -151,7 +151,7 @@ app.get('/api/history', async (req, res) => {
         if (error) throw error;
         return res.json(data);
     } catch (error) {
-        return res.status(500).json({ error: 'Failed to query historical metrics.' });
+        return res.status(500).json({ error: `Failed to query historical metrics: ${error.message || error}` });
     }
 });
 

@@ -1,5 +1,6 @@
 import express from 'express';
 import { GoogleGenAI, Type } from '@google/genai';
+import { createClient } from '@supabase/supabase-js';
 import multer from 'multer';
 import dotenv from 'dotenv';
 
@@ -10,9 +11,9 @@ const port = process.env.PORT || 3000;
 
 // Initialize using the same SDK configuration pattern as your POC
 const ai = new GoogleGenAI({});
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
 const upload = multer({ storage: multer.memoryStorage() });
-
 app.use(express.json());
 
 // Merged & Optimized Schema directly honoring your POC structure
@@ -88,11 +89,69 @@ app.post('/api/analyze-plate', upload.single('image'), async (req, res) => {
         });
 
         const nutritionData = JSON.parse(response.text);
-        return res.json(nutritionData);
 
+        // --- Database Persistence Step ---
+
+        // 1. Write metadata tracking metrics into parent table
+        const { data: mealRow, error: mealError } = await supabase
+            .from('meals')
+            .insert([{
+                meal_name: nutritionData.meal_name,
+                confidence_score: nutritionData.confidence_score,
+                estimated_total_weight_grams: nutritionData.estimated_total_weight_grams,
+                vitamin_d_mcg: nutritionData.micronutrients.vitamin_d_mcg,
+                magnesium_mg: nutritionData.micronutrients.magnesium_mg,
+                potassium_mg: nutritionData.micronutrients.potassium_mg,
+                sodium_mg: nutritionData.micronutrients.sodium_mg,
+                bodybuilding_notes: nutritionData.bodybuilding_notes
+            }])
+            .select()
+            .single();
+
+        if (mealError) throw mealError;
+
+        // 2. Map generated tracking key id onto child component items array
+        const dishesToInsert = nutritionData.dishes.map(dish => ({
+            meal_id: mealRow.id,
+            name: dish.name,
+            estimated_weight_g: dish.estimated_weight_g,
+            calories: dish.calories,
+            protein_g: dish.protein_g,
+            carbs_g: dish.carbs_g,
+            fats_g: dish.fats_g
+        }));
+
+        // 3. Perform batch transaction append operation on children components table
+        const { error: dishesError } = await supabase
+            .from('meal_dishes')
+            .insert(dishesToInsert);
+
+        if (dishesError) throw dishesError;
+
+        // Return a response containing the full entity model back to the phone screen
+        return res.json({
+            message: "Meal scanned and logged successfully 🚀",
+            meal_id: mealRow.id,
+            data: nutritionData
+        });
     } catch (error) {
-        console.error('Error analyzing image:', error);
+        console.error('Data pipeline operations failed:', error);
         return res.status(500).json({ error: 'Failed to analyze food image.' });
+    }
+});
+
+// GET Endpoint to fetch historic entries for data logging dashboard
+app.get('/api/history', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('meals')
+            .select('*, meal_dishes(*)')
+            .order('created_at', { ascending: false });
+
+        if (error) throw error;
+        return res.json(data);
+    } catch (error) {
+        return res.status(500).json({ error: 'Failed to query historical metrics.' });
     }
 });
 

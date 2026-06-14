@@ -57,6 +57,29 @@ const nutritionSchema = {
     required: ["meal_name", "confidence_score", "estimated_total_weight_grams", "dishes", "micronutrients", "bodybuilding_notes"],
 };
 
+const workoutSchema = {
+    type: Type.OBJECT,
+    properties: {
+        plan_title: { type: Type.STRING },
+        workout_split: { type: Type.STRING },
+        exercises: {
+            type: Type.ARRAY,
+            items: {
+                type: Type.OBJECT,
+                properties: {
+                    name: { type: Type.STRING },
+                    sets: { type: Type.STRING },
+                    reps: { type: Type.STRING },
+                    rest: { type: Type.STRING },
+                    note: { type: Type.STRING }
+                },
+                required: ["name", "sets", "reps", "rest", "note"]
+            }
+        }
+    },
+    required: ["plan_title", "workout_split", "exercises"]
+};
+
 app.post('/api/analyze-plate', upload.single('image'), async (req, res) => {
     try {
         if (!req.file) {
@@ -247,6 +270,89 @@ app.put('/api/history/:id', async (req, res) => {
     } catch (error) {
         console.error('Failed to update meal log:', error);
         return res.status(500).json({ error: `Failed to update meal log: ${error.message || error}` });
+    }
+});
+
+// POST Endpoint to generate AI workout plans with Gemini and persist them
+app.post('/api/workout/generate', async (req, res) => {
+    const { goal, days_per_week, experience_level } = req.body;
+
+    if (!goal || !days_per_week || !experience_level) {
+        return res.status(400).json({ error: "Please provide goal, days_per_week, and experience_level." });
+    }
+
+    try {
+        const prompt = `
+            Create a highly professional and tailored bodybuilding weekly workout routine for a user whose goal is "${goal}", 
+            has ${days_per_week} days available per week, and is at the "${experience_level}" training experience level. 
+            Structure the response to include a split title, the split overview description, and a list of target exercises. 
+            Provide realistic sets (typically 3-4), reps (focused on goal e.g. hypertrophy 8-12, strength 3-6), rest periods (90s-180s), 
+            and a very concise technical tip or coaching note for each exercise.
+        `;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                responseMimeType: 'application/json',
+                responseSchema: workoutSchema,
+                temperature: 0.7, 
+            }
+        });
+
+        const workoutData = JSON.parse(response.text);
+
+        // Attempt persistence to Supabase. Fallback gracefully if database table doesn't exist yet.
+        let savedToDb = false;
+        try {
+            const { error: dbError } = await supabase
+                .from('workouts')
+                .insert([{
+                    goal,
+                    days_per_week: parseInt(days_per_week),
+                    experience_level,
+                    plan_title: workoutData.plan_title,
+                    workout_split: workoutData.workout_split,
+                    exercises: workoutData.exercises
+                }]);
+
+            if (dbError) {
+                console.warn('Could not persist workout to Supabase workouts table (it may not exist yet):', dbError.message);
+            } else {
+                savedToDb = true;
+            }
+        } catch (dbErr) {
+            console.warn('Failed database write transaction for workouts:', dbErr.message || dbErr);
+        }
+
+        return res.json({
+            ...workoutData,
+            saved_to_db: savedToDb
+        });
+    } catch (error) {
+        console.error('Failed to generate workout plan:', error);
+        return res.status(500).json({ error: `Failed to generate workout plan: ${error.message || error}` });
+    }
+});
+
+// GET Endpoint to fetch the latest custom workout plan
+app.get('/api/workout/latest', async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('workouts')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+
+        if (error) {
+            console.warn('Failed to query workouts table (it may not exist yet):', error.message);
+            return res.json(null);
+        }
+        return res.json(data);
+    } catch (error) {
+        console.error('Failed to get latest workout split:', error);
+        return res.json(null); 
     }
 });
 
